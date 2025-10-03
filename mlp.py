@@ -31,7 +31,7 @@ class mlp:
             print(f"W{i+1} shape {w.shape}:\n{w}")
             print(f"b{i+1} shape {b.shape}:\n{b}\n")
 
-    def train(self, X, y, threshold: float = 1e-5, window: int = 10) -> None:
+    def train(self, X, y, threshold: float = 1e-4, window: int = 10) -> None:
         loss_history = []
 
         for epoch in range(self.epochs):
