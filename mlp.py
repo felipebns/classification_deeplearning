@@ -17,7 +17,7 @@ class mlp:
 
         self.weights = []
         self.biases = []
-        self.layer_dims = [n_features] + n_neurons_per_layer #dimensões de cada camada, incluindo a de output
+        self.layer_dims = [n_features] + n_neurons_per_layer
 
         for i in range(len(self.layer_dims) - 1):
             w = np.random.randn(self.layer_dims[i+1], self.layer_dims[i]) * 0.1
@@ -25,13 +25,16 @@ class mlp:
             self.weights.append(w)
             self.biases.append(b)
 
+        # histórico de treino
+        self.history = {"loss": [], "accuracy": []}
+
         print("\n=== Inicialização de Pesos e Biases ===")
         for i, (w, b) in enumerate(zip(self.weights, self.biases)):
             print(f"Camada {i+1}:")
             print(f"W{i+1} shape {w.shape}:\n{w}")
             print(f"b{i+1} shape {b.shape}:\n{b}\n")
 
-    def train(self, X, y, threshold: float = 1e-4, window: int = 10) -> None:
+    def train(self, X, y, threshold: float = 5e-3, window: int = 10) -> None:
         loss_history = []
 
         for epoch in range(self.epochs):
@@ -46,13 +49,21 @@ class mlp:
             avg_loss = total_loss / len(y)
             loss_history.append(avg_loss)
 
+            preds_train = self.test(X)
+            train_acc = self.calculate_accuracy(y, preds_train)
+
+            # armazenar no histórico
+            self.history["loss"].append(avg_loss)
+            self.history["accuracy"].append(train_acc)
+
             if epoch % 10 == 0:
-                print(f"Epoch {epoch}, Loss: {avg_loss:.6f}")
+                acc_str = f"{train_acc*100:.2f}%" if not np.isnan(train_acc) else "nan"
+                print(f"Epoch {epoch}, Loss: {avg_loss:.6f}, Train Acc: {acc_str}")
 
             # critério de parada: média móvel dos últimos "window" epochs
             if epoch >= window:
-                moving_avg_prev = np.mean(loss_history[-2*window:-window]) #-20 até -10
-                moving_avg_curr = np.mean(loss_history[-window:]) # -10 até atual
+                moving_avg_prev = np.mean(loss_history[-2*window:-window])
+                moving_avg_curr = np.mean(loss_history[-window:])
                 if abs(moving_avg_prev - moving_avg_curr) < threshold:
                     print(f"Treinamento encerrado no epoch {epoch} (convergência detectada).")
                     break
@@ -60,12 +71,15 @@ class mlp:
     def test(self, X: np.ndarray) -> np.ndarray:
         preds = []
         for i in range(len(X)): 
-            y_pred, _ = self.forward_pass(X[i]) #utiliza pesos já definidos da mlp
+            y_pred, _ = self.forward_pass(X[i])
             if self.loss == "cross_entropy":
-                preds.append(np.argmax(y_pred))  # multi-class, pega o maior do vetor
+                preds.append(np.argmax(y_pred))
             else:
-                preds.append(1 if y_pred > 0.5 else 0)  # binário
+                val = np.array(y_pred).ravel()
+                v = val[0] if val.size > 0 else val
+                preds.append(1 if v > 0.5 else 0)
         return np.array(preds)
+
 
     def evaluate(self, X: np.ndarray, y: np.ndarray, plot_confusion: bool, plot_roc: bool, preds: np.ndarray) -> None:
         acc = self.calculate_accuracy(y, preds)
@@ -82,46 +96,82 @@ class mlp:
         binary = (len(np.unique(y)) == 2)
 
         if plot_confusion:
-            cm = confusion_matrix(y, preds)
-            cm_norm = cm.astype("float") / cm.sum(axis=1)[:, np.newaxis]  # normaliza por linha
+            self.plot_confusion_matrix(y, preds)
 
-            plt.figure(figsize=(6,5))
-            sns.heatmap(cm_norm, annot=cm, fmt="d", cmap="Blues", xticklabels=np.unique(y), yticklabels=np.unique(y))
-            plt.title("Confusion Matrix (normalized by row)")
-            plt.xlabel("Predicted")
-            plt.ylabel("True")
-            plt.show()
-
-        # ROC curve (somente para binário)
         if plot_roc and binary:
-            # coletar probabilidades em vez de labels
-            y_scores = []
-            for i in range(len(X)):
-                y_pred, _ = self.forward_pass(X[i])
-                if self.loss == "cross_entropy":
-                    y_scores.append(y_pred[1])  # probabilidade da classe 1
-                else:
-                    y_scores.append(y_pred)     # saída do sigmoid
-            y_scores = np.array(y_scores)
+            self.plot_roc_curve(X, y)
 
-            fpr, tpr, _ = roc_curve(y, y_scores)
-            roc_auc = auc(fpr, tpr)
+        # sempre plota histórico se existir
+        if self.history and len(self.history.get("loss", [])) > 0:
+            self.plot_history()
 
-            plt.figure()
-            plt.plot(fpr, tpr, color="darkorange", lw=2, label=f"ROC curve (area = {roc_auc:.2f})")
-            plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
-            plt.xlabel("False Positive Rate")
-            plt.ylabel("True Positive Rate")
-            plt.title("Receiver Operating Characteristic (ROC)")
-            plt.legend(loc="lower right")
-            plt.show()
+    # -------- Funções auxiliares de plot --------
+    def plot_confusion_matrix(self, y_true, y_pred):
+        cm = confusion_matrix(y_true, y_pred)
+        cm_norm = cm.astype("float") / cm.sum(axis=1)[:, np.newaxis]
+
+        plt.figure(figsize=(6,5))
+        sns.heatmap(cm_norm, annot=cm, fmt="d", cmap="Blues",
+                    xticklabels=np.unique(y_true),
+                    yticklabels=np.unique(y_true))
+        plt.title("Confusion Matrix (normalized by row)")
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
+        plt.show()
+
+    def plot_roc_curve(self, X, y_true):
+        y_scores = []
+        for i in range(len(X)):
+            y_pred, _ = self.forward_pass(X[i])
+            if self.loss == "cross_entropy":
+                y_scores.append(y_pred[1])
+            else:
+                val = np.array(y_pred).ravel()
+                y_scores.append(val[0] if val.size > 0 else val)
+        y_scores = np.array(y_scores)
+
+        fpr, tpr, _ = roc_curve(y_true, y_scores)
+        roc_auc = auc(fpr, tpr)
+
+        plt.figure()
+        plt.plot(fpr, tpr, color="darkorange", lw=2,
+                 label=f"ROC curve (area = {roc_auc:.2f})")
+        plt.plot([0, 1], [0, 1], color="navy", lw=2, linestyle="--")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title("Receiver Operating Characteristic (ROC)")
+        plt.legend(loc="lower right")
+        plt.show()
+
+    def plot_history(self):
+        """Plota loss e accuracy armazenados em self.history."""
+        loss = self.history.get("loss", [])
+        acc = self.history.get("accuracy", [])
+        epochs = np.arange(1, len(loss)+1)
+
+        fig, axes = plt.subplots(1, 2, figsize=(12,4))
+        # loss
+        axes[0].plot(epochs, loss, marker="o")
+        axes[0].set_title("Loss por Epoch")
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("Loss")
+        axes[0].grid(True, linestyle="--", alpha=0.4)
+        # accuracy
+        axes[1].plot(epochs, acc, marker="o")
+        axes[1].set_title("Accuracy por Epoch (treino)")
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("Accuracy")
+        axes[1].grid(True, linestyle="--", alpha=0.4)
+
+        plt.tight_layout()
+        plt.show()
 
     def calculate_accuracy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         return np.mean(y_true == y_pred)
 
     def forward_pass(self, x: np.ndarray) -> tuple:
         a = x
-        cache = {"z": [], "a": [a]}  # salva ativações
+        cache = {"z": [], "a": [a]}
         for i in range(len(self.weights)):
             z = np.dot(self.weights[i], a) + self.biases[i]
             if i == len(self.weights) - 1 and self.loss == "cross_entropy":
@@ -168,7 +218,7 @@ class mlp:
         return grads_w, grads_b
         
     def update_parameters(self, grads_w, grads_b):
-        if self.optimizer == "gd":  # Gradient Descent padrão
+        if self.optimizer == "gd":
             for i in range(len(self.weights)):
                 self.weights[i] -= self.eta * grads_w[i]
                 self.biases[i]  -= self.eta * grads_b[i]
@@ -196,7 +246,7 @@ class mlp:
     def mse(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
         return np.mean((y_true - y_pred)**2)
 
-    def derive_mse(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    def derive_mse(self, y_true: np.ndarray, y_pred: np.ndarray) -> np.ndarray:
         return -2*(y_true - y_pred)
 
     def cross_entropy(self, y_true: np.ndarray, y_pred: np.ndarray) -> float:
